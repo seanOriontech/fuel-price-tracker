@@ -50,6 +50,18 @@ CHART_TEXT = "#cbd5e1"
 
 st.set_page_config(page_title="Fuel Price Tracker | OrionTech", page_icon="⛽", layout="wide")
 
+# --- Google Analytics ---
+st.markdown("""
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-2K2D3YHPRV"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-2K2D3YHPRV');
+</script>
+""", unsafe_allow_html=True)
+
 # --- Inject OrionTech CSS ---
 st.markdown(f"""
 <style>
