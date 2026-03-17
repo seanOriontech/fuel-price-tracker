@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 240 60"
+   fill="none"
+   version="1.1"
+   id="svg48"
+   sodipodi:docname="oriontech-logo.svg"
+   inkscape:version="1.2.2 (b0a84865, 2022-12-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview50"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="3.9333333"
+     inkscape:cx="112.37288"
+     inkscape:cy="30"
+     inkscape:window-width="1309"
+     inkscape:window-height="456"
+     inkscape:window-x="0"
+     inkscape:window-y="1800"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg48" />
+  <defs
+     id="defs22">
+    <linearGradient
+       id="navOrbit1"
+       x1="4"
+       y1="16"
+       x2="16"
+       y2="28">
+      <stop
+         stop-color="#22d3ee"
+         id="stop2" />
+      <stop
+         offset="1"
+         stop-color="#336dff"
+         id="stop4" />
+    </linearGradient>
+    <linearGradient
+       id="navOrbit2"
+       x1="28"
+       y1="16"
+       x2="16"
+       y2="4">
+      <stop
+         stop-color="#336dff"
+         stop-opacity="0.5"
+         id="stop7" />
+      <stop
+         offset="1"
+         stop-color="#22d3ee"
+         stop-opacity="0.1"
+         id="stop9" />
+    </linearGradient>
+    <linearGradient
+       id="navRing"
+       x1="9"
+       y1="9"
+       x2="23"
+       y2="23">
+      <stop
+         stop-color="#67e8f9"
+         id="stop12" />
+      <stop
+         offset="1"
+         stop-color="#336dff"
+         id="stop14" />
+    </linearGradient>
+    <radialGradient
+       id="navCore"
+       cx="16"
+       cy="16"
+       r="3"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         stop-color="#a5f3fc"
+         id="stop17" />
+      <stop
+         offset="1"
+         stop-color="#22d3ee"
+         id="stop19" />
+    </radialGradient>
+  </defs>
+  <!-- Icon at 0,0 scaled to 44px -->
+  <g
+     transform="translate(6,8) scale(1.375)"
+     id="g42">
+    <path
+       d="M16 4C9.373 4 4 9.373 4 16s5.373 12 12 12"
+       stroke="url(#navOrbit1)"
+       stroke-width="1.5"
+       stroke-linecap="round"
+       opacity="0.6"
+       fill="none"
+       id="path24" />
+    <path
+       d="M16 4c6.627 0 12 5.373 12 12s-5.373 12-12 12"
+       stroke="url(#navOrbit2)"
+       stroke-width="1.5"
+       stroke-linecap="round"
+       opacity="0.3"
+       fill="none"
+       id="path26" />
+    <circle
+       cx="16"
+       cy="16"
+       r="7"
+       stroke="url(#navRing)"
+       stroke-width="1.5"
+       opacity="0.8"
+       fill="none"
+       id="circle28" />
+    <circle
+       cx="16"
+       cy="16"
+       r="3"
+       fill="url(#navCore)"
+       id="circle30" />
+    <circle
+       cx="16"
+       cy="4"
+       r="1.5"
+       fill="#22d3ee"
+       id="circle32" />
+    <circle
+       cx="27"
+       cy="13"
+       r="1"
+       fill="#22d3ee"
+       opacity="0.6"
+       id="circle34" />
+    <circle
+       cx="7"
+       cy="22"
+       r="1"
+       fill="#67e8f9"
+       opacity="0.5"
+       id="circle36" />
+    <line
+       x1="16"
+       y1="5.5"
+       x2="16"
+       y2="9"
+       stroke="#22d3ee"
+       stroke-width="0.75"
+       opacity="0.4"
+       id="line38" />
+    <line
+       x1="23"
+       y1="16"
+       x2="26"
+       y2="13.5"
+       stroke="#22d3ee"
+       stroke-width="0.75"
+       opacity="0.3"
+       id="line40" />
+  </g>
+  <!-- Oriontech wordmark -->
+  <text
+     x="56"
+     y="40"
+     font-family="Inter, system-ui, sans-serif"
+     font-size="26"
+     font-weight="700"
+     letter-spacing="-0.5"
+     fill="#ffffff"
+     id="text44">Orion</text>
+  <text
+     x="114"
+     y="40"
+     font-family="Inter, system-ui, sans-serif"
+     font-size="26"
+     font-weight="700"
+     letter-spacing="-0.5"
+     fill="#22d3ee"
+     id="text46">tech</text>
+</svg>

@@ -1,0 +1,7 @@
+# Generated charts
+output/*.png
+
+# Python
+__pycache__/
+*.pyc
+.env

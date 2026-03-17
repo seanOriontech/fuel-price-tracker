@@ -1,0 +1,12 @@
+event_tag,event_name,start_date,end_date,region,description,peak_oil_impact_pct
+gulf_war,Gulf War (Iraq invades Kuwait),1990-08-02,1991-02-28,Middle East,Iraq invaded Kuwait triggering US-led coalition response. Oil spiked 130% in months.,130
+war_on_terror,9/11 & War on Terror,2001-09-11,2001-12-31,Global,September 11 attacks caused brief oil spike followed by demand concerns.,12
+iraq_war,Iraq War (US Invasion),2003-03-20,2011-12-18,Middle East,US-led invasion of Iraq. Oil rose steadily from $25 to over $130 by 2008.,60
+libya_conflict,Libyan Civil War,2011-02-15,2011-10-23,North Africa,NATO intervention in Libya removed 1.6M barrels/day from market.,25
+isis_syria,ISIS & Syrian Civil War,2014-06-01,2017-12-31,Middle East,ISIS captured Iraqi oil fields. Coincided with oversupply leading to price crash.,15
+us_iran_sanctions,US-Iran Sanctions,2018-05-08,2019-12-31,Middle East,Trump withdrew from Iran nuclear deal. Sanctions on Iranian oil exports.,-10
+saudi_aramco_attack,Saudi Aramco Drone Attack,2019-09-14,2019-09-30,Middle East,Houthi drone attack on Saudi oil facilities. Largest single supply disruption ever.,15
+saudi_russia_price_war,Saudi-Russia Oil Price War,2020-03-08,2020-04-12,Global,Saudi Arabia flooded market after Russia refused OPEC+ cuts. Oil crashed to $18.,-71
+russia_ukraine_war,Russia-Ukraine War,2022-02-24,2025-12-31,Europe/Global,Russian invasion of Ukraine. Western sanctions on Russian energy. Brent hit $128.,50
+israel_hamas_war,Israel-Hamas War,2023-10-07,2025-12-31,Middle East,Hamas attack on Israel triggered regional conflict. Risk premium on oil.,15
+middle_east_escalation,Middle East Escalation,2024-04-01,2026-12-31,Middle East,Iran-Israel tensions and broader regional instability. Shipping disruptions in Red Sea.,20
