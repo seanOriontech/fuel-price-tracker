@@ -2,12 +2,13 @@
 Live Data Fetcher
 ====================
 Pulls latest oil prices, exchange rates, and SA fuel data
-from reliable public APIs.
+from reliable public sources and updates the CSV files used
+by the dashboard.
 
 Sources:
-  - Oil:   Alpha Vantage (free key) → fallback Yahoo Finance
-  - Forex: ExchangeRate-API (free 1500 req/month) → fallback Open ER API
-  - Fuel:  DMRE gazette scraper (energy.gov.za)
+  - Oil:   Alpha Vantage (free key) → Yahoo Finance fallback
+  - Forex: ExchangeRate-API (free, no key) → Alpha Vantage FX
+  - Fuel:  AA.co.za scraper → DMRE gazette PDF → manual fallback
 
 Setup:
   1. Get free Alpha Vantage key:  https://www.alphavantage.co/support/#api-key
@@ -25,7 +26,6 @@ import os
 import re
 import sys
 import csv
-import json
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -36,11 +36,16 @@ except ImportError:
     HAS_REQUESTS = False
     print("Note: Install requests — pip install requests")
 
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
+
 DATA_DIR = Path(__file__).parent / "data"
 ENV_FILE = Path(__file__).parent / ".env"
 
 # ── Config ──────────────────────────────────────────────────
-# Load .env file if it exists
 if ENV_FILE.exists():
     for line in ENV_FILE.read_text().splitlines():
         line = line.strip()
@@ -50,41 +55,30 @@ if ENV_FILE.exists():
 
 ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "")
 
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; OrionTech-FuelTracker/2.0)"}
+
 
 # ════════════════════════════════════════════════════════════
 #  OIL PRICES
 # ════════════════════════════════════════════════════════════
 
 def fetch_oil_alpha_vantage() -> list[dict]:
-    """
-    Fetch Brent crude prices from Alpha Vantage.
-    Free tier: 25 requests/day.
-    Endpoint: WTI & Brent monthly via BRENT commodity function.
-    """
-    if not HAS_REQUESTS:
-        print("  requests library required. pip install requests")
-        return []
-
-    if not ALPHA_VANTAGE_KEY:
-        print("  No ALPHA_VANTAGE_KEY set — skipping Alpha Vantage")
-        print("  Get a free key: https://www.alphavantage.co/support/#api-key")
+    """Fetch Brent crude prices from Alpha Vantage (free, 25 req/day)."""
+    if not HAS_REQUESTS or not ALPHA_VANTAGE_KEY:
+        if not ALPHA_VANTAGE_KEY:
+            print("  No ALPHA_VANTAGE_KEY set — skipping Alpha Vantage")
         return []
 
     print("  [Alpha Vantage] Fetching Brent crude prices...")
 
     url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "BRENT",
-        "interval": "monthly",
-        "apikey": ALPHA_VANTAGE_KEY,
-    }
+    params = {"function": "BRENT", "interval": "monthly", "apikey": ALPHA_VANTAGE_KEY}
 
     try:
         resp = requests.get(url, params=params, timeout=20)
         resp.raise_for_status()
         data = resp.json()
 
-        # Check for API limit message
         if "Note" in data or "Information" in data:
             msg = data.get("Note", data.get("Information", ""))
             print(f"    API limit: {msg[:80]}")
@@ -100,9 +94,7 @@ def fetch_oil_alpha_vantage() -> list[dict]:
                     "event_tag": "",
                 })
 
-        # Sort chronologically
         records.sort(key=lambda r: r["date"])
-
         print(f"    Got {len(records)} monthly data points")
         if records:
             print(f"    Latest: ${records[-1]['brent_usd']}/bbl ({records[-1]['date']})")
@@ -129,7 +121,7 @@ def fetch_oil_yahoo_fallback() -> list[dict]:
     )
 
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
@@ -163,276 +155,460 @@ def fetch_oil_prices() -> list[dict]:
     return records
 
 
+def update_oil_csv(new_records: list[dict]):
+    """
+    Merge new oil price records into the existing CSV,
+    preserving hand-curated event_tag labels.
+    """
+    filepath = DATA_DIR / "brent_oil_prices.csv"
+
+    # Load existing data with event_tags
+    existing = {}
+    if filepath.exists():
+        with open(filepath, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                existing[row["date"]] = row
+
+    added = 0
+    updated = 0
+    for rec in new_records:
+        date = rec["date"]
+        if date in existing:
+            # Update price but keep existing event_tag
+            old_price = existing[date].get("brent_usd", "")
+            if str(rec["brent_usd"]) != str(old_price):
+                existing[date]["brent_usd"] = rec["brent_usd"]
+                updated += 1
+        else:
+            existing[date] = rec
+            added += 1
+
+    # Write sorted by date
+    rows = sorted(existing.values(), key=lambda r: r["date"])
+    with open(filepath, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["date", "brent_usd", "event_tag"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"    Oil CSV: {added} added, {updated} updated, {len(rows)} total")
+
+
 # ════════════════════════════════════════════════════════════
 #  EXCHANGE RATES
 # ════════════════════════════════════════════════════════════
 
-def fetch_zar_exchangerate_api() -> list[dict]:
-    """
-    Fetch ZAR/USD from ExchangeRate-API.
-    Free tier: 1500 requests/month, no key needed for open endpoint.
-    """
+def fetch_current_zar_usd() -> float | None:
+    """Fetch current ZAR/USD rate from ExchangeRate-API (free, no key)."""
     if not HAS_REQUESTS:
-        return []
+        return None
 
     print("  [ExchangeRate-API] Fetching ZAR/USD...")
 
-    url = "https://open.er-api.com/v6/latest/USD"
-
     try:
-        resp = requests.get(url, timeout=15)
+        resp = requests.get("https://open.er-api.com/v6/latest/USD", timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
         if data.get("result") != "success":
-            print(f"    API error: {data.get('error-type', 'unknown')}")
-            return []
+            return None
 
-        zar_rate = data.get("rates", {}).get("ZAR")
-        if not zar_rate:
-            print("    ZAR rate not found in response")
-            return []
-
-        last_update = data.get("time_last_update_utc", "")
-        print(f"    Current ZAR/USD: R{zar_rate:.2f}")
-        print(f"    Last updated: {last_update[:25]}")
-
-        return [{
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "zar_usd": round(zar_rate, 2),
-            "source": "exchangerate-api",
-        }]
+        rate = data.get("rates", {}).get("ZAR")
+        if rate:
+            print(f"    Current ZAR/USD: R{rate:.2f}")
+            return round(rate, 2)
 
     except Exception as e:
         print(f"    Error: {e}")
-        return []
 
-
-def fetch_zar_alpha_vantage() -> list[dict]:
-    """Fetch ZAR/USD monthly from Alpha Vantage forex endpoint."""
-    if not HAS_REQUESTS or not ALPHA_VANTAGE_KEY:
-        return []
-
-    print("  [Alpha Vantage] Fetching ZAR/USD historical...")
-
-    url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "FX_MONTHLY",
-        "from_symbol": "USD",
-        "to_symbol": "ZAR",
-        "apikey": ALPHA_VANTAGE_KEY,
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-
-        if "Note" in data or "Information" in data:
-            msg = data.get("Note", data.get("Information", ""))
-            print(f"    API limit: {msg[:80]}")
-            return []
-
-        ts_key = "Time Series FX (Monthly)"
-        time_series = data.get(ts_key, {})
-
-        records = []
-        for date_str, values in sorted(time_series.items()):
-            close = values.get("4. close")
-            if close:
-                records.append({
-                    "date": date_str,
-                    "zar_usd": round(float(close), 2),
-                    "source": "alpha-vantage",
-                })
-
-        print(f"    Got {len(records)} monthly data points")
-        if records:
-            latest = records[-1]
-            print(f"    Latest: R{latest['zar_usd']:.2f}/$ ({latest['date']})")
-        return records
-
-    except Exception as e:
-        print(f"    Error: {e}")
-        return []
-
-
-def fetch_zar_usd() -> list[dict]:
-    """Fetch exchange rates — ExchangeRate-API first, Alpha Vantage historical."""
-    records = fetch_zar_exchangerate_api()
-
-    # Also grab historical if Alpha Vantage key is available
-    if ALPHA_VANTAGE_KEY:
-        historical = fetch_zar_alpha_vantage()
-        if historical:
-            # Merge: keep historical + add today's rate
-            existing_dates = {r["date"] for r in historical}
-            for r in records:
-                if r["date"] not in existing_dates:
-                    historical.append(r)
-            return sorted(historical, key=lambda x: x["date"])
-
-    return records
+    return None
 
 
 # ════════════════════════════════════════════════════════════
-#  SA FUEL PRICES (DMRE Scraper)
+#  SA FUEL PRICES
 # ════════════════════════════════════════════════════════════
 
-def fetch_sa_fuel_prices() -> list[dict]:
+def fetch_sa_fuel_from_aa() -> dict | None:
     """
-    Scrape latest SA fuel prices from DMRE (energy.gov.za).
-    The DMRE publishes monthly fuel price adjustments.
-    This attempts to get the latest published prices.
+    Scrape current SA fuel prices from AA (Automobile Association).
+    Returns dict with coastal/inland prices or None.
     """
     if not HAS_REQUESTS:
-        return []
+        return None
 
-    print("  [DMRE] Scraping SA fuel prices...")
-
-    # DMRE fuel price page
-    url = "https://www.energy.gov.za/files/esources/petroleum/petroleum_fuelprices.html"
+    print("  [AA.co.za] Scraping fuel prices...")
 
     try:
-        resp = requests.get(url, timeout=20, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; FuelTracker/1.0)"
-        })
-
+        resp = requests.get("https://aa.co.za/fuel-pricing/", headers=HEADERS, timeout=15)
         if resp.status_code != 200:
-            print(f"    DMRE page returned {resp.status_code}")
-            return _try_sapia_fallback()
+            print(f"    AA returned {resp.status_code}")
+            return None
 
         html = resp.text
 
-        # Look for price data in the page
-        # DMRE typically has tables with current fuel prices
-        # Pattern: look for petrol 95 prices in cents/litre
-        records = _parse_dmre_html(html)
+        # AA page has fuel prices in a structured format
+        # Look for price patterns near fuel type labels
+        result = {}
 
-        if records:
-            print(f"    Found {len(records)} fuel price entries")
-            return records
+        # Try to extract prices — AA typically lists them as "R XX.XX"
+        # Match patterns like "95 ULP" followed by prices
+        price_pattern = r'R\s*(\d{1,2}\.\d{2})'
+        all_prices = re.findall(price_pattern, html)
 
-        print("    Could not parse prices from DMRE page")
-        return _try_sapia_fallback()
+        if all_prices:
+            prices = [float(p) for p in all_prices if 10 < float(p) < 35]
+            if len(prices) >= 2:
+                # AA typically lists coastal then inland
+                result["petrol_95_coastal"] = prices[0]
+                result["petrol_95_inland"] = prices[1] if len(prices) > 1 else None
+                print(f"    95 Coastal: R{prices[0]:.2f}")
+                if len(prices) > 1:
+                    print(f"    95 Inland: R{prices[1]:.2f}")
+                return result
+
+        print("    Could not parse AA prices")
+        return None
 
     except Exception as e:
-        print(f"    DMRE scrape failed: {e}")
-        return _try_sapia_fallback()
+        print(f"    AA scrape failed: {e}")
+        return None
 
 
-def _parse_dmre_html(html: str) -> list[dict]:
-    """Parse fuel prices from DMRE HTML page."""
-    records = []
-
-    # Try to find price patterns — DMRE uses various formats
-    # Common pattern: prices in cents like "2574.00" for R25.74
-    # Look for Petrol 95 patterns
-    patterns = [
-        # Pattern: "Petrol 95 ULP ... 2574"
-        r'(?:Petrol|95\s*ULP)[^0-9]*?(\d{3,4}(?:\.\d{1,2})?)',
-        # Pattern: "R 25.74" or "R25.74"
-        r'R\s*(\d{1,2}\.\d{2})',
-    ]
-
-    for pattern in patterns:
-        matches = re.findall(pattern, html, re.IGNORECASE)
-        if matches:
-            for match in matches[:4]:  # Take first few matches
-                val = float(match)
-                # If in cents, convert to rands
-                if val > 100:
-                    val = val / 100
-                if 8 < val < 40:  # Sanity check for realistic fuel price
-                    records.append({
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "price_type": "petrol_95",
-                        "price_rands": round(val, 2),
-                        "source": "dmre",
-                    })
-            break
-
-    return records
-
-
-def _try_sapia_fallback() -> list[dict]:
-    """Fallback: try SAPIA (SA Petroleum Industry Association) for fuel data."""
+def fetch_sa_fuel_from_petrolprice() -> dict | None:
+    """
+    Scrape current SA fuel prices from petrol-price.co.za.
+    Returns dict with fuel prices or None.
+    """
     if not HAS_REQUESTS:
-        return []
+        return None
 
-    print("  [SAPIA] Trying fallback...")
+    print("  [petrol-price.co.za] Scraping fuel prices...")
 
     try:
-        url = "https://www.sapia.org.za/fuel-prices"
-        resp = requests.get(url, timeout=15, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; FuelTracker/1.0)"
-        })
+        resp = requests.get("https://www.petrol-price.co.za/", headers=HEADERS, timeout=15)
+        if resp.status_code != 200:
+            print(f"    petrol-price.co.za returned {resp.status_code}")
+            return None
 
-        if resp.status_code == 200:
-            # Try basic pattern matching for prices
-            matches = re.findall(r'R\s*(\d{1,2}\.\d{2})', resp.text)
-            records = []
-            for match in matches[:4]:
-                val = float(match)
-                if 8 < val < 40:
-                    records.append({
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "price_type": "petrol_95",
-                        "price_rands": round(val, 2),
-                        "source": "sapia",
-                    })
-            if records:
-                print(f"    Found {len(records)} prices from SAPIA")
-                return records
+        html = resp.text
+        result = {}
+
+        # Look for price values — site shows inland and coastal
+        # Patterns: "R20.30" or "2030" (cents)
+        price_pattern = r'R\s*(\d{1,2}\.\d{2})'
+        all_prices = re.findall(price_pattern, html)
+
+        fuel_prices = [float(p) for p in all_prices if 10 < float(p) < 35]
+
+        if fuel_prices:
+            # Deduplicate keeping order
+            seen = set()
+            unique = []
+            for p in fuel_prices:
+                if p not in seen:
+                    seen.add(p)
+                    unique.append(p)
+            fuel_prices = unique
+
+            if len(fuel_prices) >= 2:
+                # Sort to identify coastal (lower) and inland (higher)
+                sorted_prices = sorted(fuel_prices[:6])
+                result["petrol_95_coastal"] = sorted_prices[0]
+                result["petrol_95_inland"] = sorted_prices[1] if len(sorted_prices) > 1 else None
+
+                print(f"    Found {len(fuel_prices)} price values")
+                for p in fuel_prices[:6]:
+                    print(f"      R{p:.2f}")
+                return result
+
+        print("    Could not parse prices")
+        return None
 
     except Exception as e:
-        print(f"    SAPIA fallback failed: {e}")
-
-    print("    No live fuel price data available")
-    print("    Update manually from: https://www.energy.gov.za/files/esources/petroleum/")
-    return []
+        print(f"    Scrape failed: {e}")
+        return None
 
 
-# ════════════════════════════════════════════════════════════
-#  CSV UTILITIES
-# ════════════════════════════════════════════════════════════
+def fetch_sa_fuel_from_dmre_pdf() -> dict | None:
+    """
+    Download and parse the latest DMRE fuel price breakdown PDF.
+    The DMRE publishes monthly at a predictable URL pattern.
+    """
+    if not HAS_REQUESTS:
+        return None
 
-def append_to_csv(filepath: str, records: list[dict], key_field: str = "date"):
-    """Append new records to an existing CSV, avoiding duplicates."""
-    filepath = Path(filepath)
+    print("  [DMRE PDF] Attempting gazette download...")
 
-    existing_keys = set()
-    existing_rows = []
-    fieldnames = []
+    # Try current month first, then previous month
+    now = datetime.now()
+    months_to_try = [
+        now,
+        now.replace(day=1) - timedelta(days=1),  # previous month
+    ]
+
+    for dt in months_to_try:
+        month_name = dt.strftime("%B")
+        year = dt.strftime("%Y")
+
+        url = (
+            f"https://www.dmre.gov.za/Portals/0/Resources/"
+            f"Fuel%20Prices%20Adjustments/Fuel%20Prices%20Per%20Zone/"
+            f"{year}/{month_name}%20{year}/Breakdown-of-Prices.pdf"
+        )
+
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                print(f"    Downloaded {month_name} {year} gazette ({len(resp.content)} bytes)")
+                return _parse_dmre_pdf(resp.content, dt)
+        except Exception:
+            pass
+
+        print(f"    {month_name} {year} PDF not found")
+
+    return None
+
+
+def _parse_dmre_pdf(pdf_bytes: bytes, ref_date: datetime) -> dict | None:
+    """
+    Parse fuel prices from DMRE gazette PDF.
+    DMRE format lists prices in cents/litre with entries like:
+      "2030.00 c/l" for 95 ULP Inland = R20.30
+    Each entry spans multiple lines with date, cents, fuel type, and region.
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        print("    pdfplumber not installed — pip install pdfplumber")
+        return _parse_dmre_pdf_basic(pdf_bytes, ref_date)
+
+    import io
+    result = {}
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += (page.extract_text() or "") + "\n"
+
+        if not text:
+            print("    No text extracted from PDF")
+            return None
+
+        # DMRE format: price in cents appears near fuel type and region
+        # e.g. "2030.00 c/l" followed by "(95 ULP &" and "Inland Region"
+        # Strategy: find all cents values with their surrounding context
+
+        # Extract all price blocks: cents value + nearby text
+        # Pattern: number like 1947.00 or 1853.83 followed by "c/l"
+        blocks = re.findall(
+            r'(\d{3,4}(?:\.\d{1,3})?)\s*c/l.*?(?:(\d{2,3})\s*(?:ULP|ppm|%))?.*?(Inland|Coastal)',
+            text, re.IGNORECASE | re.DOTALL
+        )
+
+        if not blocks:
+            # Fallback: scan line by line with lookahead
+            lines = text.split("\n")
+            full_text = " ".join(lines)
+
+            # Find cents values and map to fuel type + region from surrounding context
+            cents_matches = list(re.finditer(r'(\d{3,4}(?:\.\d{1,3})?)\s*c/l', full_text))
+
+            for match in cents_matches:
+                cents_val = float(match.group(1))
+                if cents_val < 500 or cents_val > 3500:
+                    continue
+
+                # Look at context around this match (200 chars before and after)
+                start = max(0, match.start() - 200)
+                end = min(len(full_text), match.end() + 200)
+                context = full_text[start:end].lower()
+
+                rands = round(cents_val / 100, 2)
+                is_inland = "inland" in context
+                is_coastal = "coastal" in context
+
+                if "95" in context and "ulp" in context:
+                    if is_inland:
+                        result["petrol_95_inland"] = rands
+                    elif is_coastal:
+                        result["petrol_95_coastal"] = rands
+                elif "93" in context and "ulp" in context:
+                    if is_inland:
+                        result["petrol_93_inland"] = rands
+                    elif is_coastal:
+                        result["petrol_93_coastal"] = rands
+                elif "0.05%" in context and "0.005%" not in context:
+                    if is_inland:
+                        result["diesel_50ppm_inland"] = rands
+                elif "0.005%" in context:
+                    # Skip 500ppm diesel — we only track 50ppm
+                    pass
+        else:
+            for cents_str, fuel_grade, region in blocks:
+                rands = round(float(cents_str) / 100, 2)
+                region_key = "inland" if "inland" in region.lower() else "coastal"
+                if fuel_grade == "95":
+                    result[f"petrol_95_{region_key}"] = rands
+                elif fuel_grade == "93":
+                    result[f"petrol_93_{region_key}"] = rands
+
+        # DMRE format puts entries sequentially:
+        # 93 Inland, 95 Inland, 93 Coastal, 95 Coastal, Diesel Inland...
+        # If regex missed, try ordered extraction
+        if not result:
+            all_cents = re.findall(r'(\d{3,4}(?:\.\d{1,3})?)\s*c/l', text)
+            prices = [round(float(c) / 100, 2) for c in all_cents if 500 < float(c) < 3500]
+
+            if len(prices) >= 4:
+                # DMRE order: 93 inland, 95 inland, 93 coastal, 95 coastal
+                result["petrol_93_inland"] = prices[0]
+                result["petrol_95_inland"] = prices[1]
+                result["petrol_93_coastal"] = prices[2]
+                result["petrol_95_coastal"] = prices[3]
+            if len(prices) >= 5:
+                result["diesel_50ppm_inland"] = prices[4]
+            if len(prices) >= 6:
+                result["diesel_50ppm_coastal"] = prices[5] if prices[5] < prices[4] else prices[4]
+
+        if result:
+            print(f"    Parsed from DMRE gazette:")
+            for k, v in sorted(result.items()):
+                print(f"      {k}: R{v:.2f}")
+            return result
+
+        print("    Could not parse structured prices from PDF")
+        return None
+
+    except Exception as e:
+        print(f"    PDF parsing error: {e}")
+        return None
+
+
+def _parse_dmre_pdf_basic(pdf_bytes: bytes, ref_date: datetime) -> dict | None:
+    """Basic PDF text extraction without pdfplumber."""
+    # Try PyPDF2 as fallback
+    try:
+        from PyPDF2 import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+
+        if text:
+            # Same parsing logic as above
+            cents_values = re.findall(r'(\d{4}\.\d{2})', text)
+            fuel_prices = [round(float(c) / 100, 2) for c in cents_values if 1000 < float(c) < 3500]
+
+            if len(fuel_prices) >= 2:
+                return {
+                    "petrol_95_coastal": fuel_prices[0],
+                    "petrol_95_inland": fuel_prices[1],
+                }
+    except ImportError:
+        print("    Neither pdfplumber nor PyPDF2 installed")
+        print("    pip install pdfplumber  (recommended)")
+    except Exception as e:
+        print(f"    Basic PDF parse failed: {e}")
+
+    return None
+
+
+def fetch_sa_fuel_prices() -> dict | None:
+    """
+    Fetch latest SA fuel prices from multiple sources.
+    Returns dict with price fields or None.
+    Tries: AA → petrol-price.co.za → DMRE PDF
+    """
+    result = fetch_sa_fuel_from_aa()
+    if result:
+        return result
+
+    result = fetch_sa_fuel_from_petrolprice()
+    if result:
+        return result
+
+    result = fetch_sa_fuel_from_dmre_pdf()
+    if result:
+        return result
+
+    print("    All fuel price sources failed")
+    print("    Update manually from: https://aa.co.za/fuel-pricing/")
+    return None
+
+
+def update_fuel_csv(fuel_prices: dict, zar_rate: float | None):
+    """
+    Add a new row to sa_fuel_prices.csv with the latest prices.
+    Only adds if the month doesn't already exist.
+    """
+    filepath = DATA_DIR / "sa_fuel_prices.csv"
+    today = datetime.now().strftime("%Y-%m-01")  # Normalize to 1st of month
+
+    # Read existing
+    existing_dates = set()
+    rows = []
+    fieldnames = [
+        "date", "petrol_95_coastal", "petrol_95_inland",
+        "petrol_93_coastal", "petrol_93_inland",
+        "diesel_50ppm_coastal", "diesel_50ppm_inland", "zar_usd",
+    ]
 
     if filepath.exists():
         with open(filepath, "r") as f:
             reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames or []
+            if reader.fieldnames:
+                fieldnames = reader.fieldnames
             for row in reader:
-                existing_keys.add(row.get(key_field, ""))
-                existing_rows.append(row)
+                existing_dates.add(row["date"])
+                rows.append(row)
 
-    new_records = [r for r in records if r.get(key_field, "") not in existing_keys]
-
-    if not new_records:
-        print(f"    No new records to add to {filepath.name}")
-        return
-
-    # Merge fieldnames
-    if existing_rows:
-        all_fields = list(dict.fromkeys(list(fieldnames) + list(new_records[0].keys())))
+    if today in existing_dates:
+        # Update existing row for this month
+        for row in rows:
+            if row["date"] == today:
+                updated = False
+                for key, val in fuel_prices.items():
+                    if val is not None and key in fieldnames:
+                        row[key] = val
+                        updated = True
+                if zar_rate:
+                    row["zar_usd"] = zar_rate
+                    updated = True
+                if updated:
+                    print(f"    Updated existing row for {today}")
+                break
     else:
-        all_fields = list(new_records[0].keys())
+        # Create new row
+        new_row = {"date": today}
+        for key, val in fuel_prices.items():
+            if val is not None:
+                new_row[key] = val
+        if zar_rate:
+            new_row["zar_usd"] = zar_rate
 
-    all_rows = existing_rows + new_records
+        # Fill missing columns from previous row
+        if rows:
+            prev = rows[-1]
+            for field in fieldnames:
+                if field not in new_row or not new_row[field]:
+                    if field in prev and prev[field]:
+                        new_row[field] = prev[field]
 
+        rows.append(new_row)
+        print(f"    Added new row for {today}")
+
+    # Write back
     with open(filepath, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(all_rows)
+        writer.writerows(rows)
 
-    print(f"    Added {len(new_records)} new records to {filepath.name}")
+    latest = rows[-1]
+    print(f"    Latest: 95 Coastal R{latest.get('petrol_95_coastal', '?')}, "
+          f"95 Inland R{latest.get('petrol_95_inland', '?')}, "
+          f"ZAR/USD R{latest.get('zar_usd', '?')}")
 
 
 # ════════════════════════════════════════════════════════════
@@ -443,44 +619,44 @@ def update_all():
     """Fetch and update all data sources."""
     print("""
 ╔══════════════════════════════════════════════════════════╗
-║              LIVE DATA FETCHER v2.0                      ║
-║   Sources: Alpha Vantage, ExchangeRate-API, DMRE         ║
+║         ORIONTECH FUEL TRACKER — DATA UPDATER            ║
+║  Sources: Alpha Vantage, ExchangeRate-API, AA, DMRE      ║
 ╚══════════════════════════════════════════════════════════╝
 """)
 
-    # Show config status
     if ALPHA_VANTAGE_KEY:
         masked = ALPHA_VANTAGE_KEY[:4] + "..." + ALPHA_VANTAGE_KEY[-4:]
         print(f"  Alpha Vantage key: {masked}")
     else:
         print("  Alpha Vantage key: NOT SET")
         print("    Get free key: https://www.alphavantage.co/support/#api-key")
-        print("    Then: export ALPHA_VANTAGE_KEY=your_key")
         print()
 
     DATA_DIR.mkdir(exist_ok=True)
 
     # ── Oil prices ──
-    print("\n  ── Oil Prices ──")
+    print("\n  ── Oil Prices ──────────────────────────")
     oil_records = fetch_oil_prices()
     if oil_records:
-        append_to_csv(str(DATA_DIR / "brent_oil_prices.csv"), oil_records)
+        update_oil_csv(oil_records)
     else:
-        print("    Using existing sample data")
+        print("    Using existing data (no live data fetched)")
 
     # ── Exchange rates ──
-    print("\n  ── Exchange Rates ──")
-    forex_records = fetch_zar_usd()
-    if forex_records:
-        latest = forex_records[-1]
-        print(f"    Latest ZAR/USD: R{latest['zar_usd']:.2f}")
+    print("\n  ── Exchange Rates ──────────────────────")
+    zar_rate = fetch_current_zar_usd()
 
     # ── SA fuel prices ──
-    print("\n  ── SA Fuel Prices ──")
-    fuel_records = fetch_sa_fuel_prices()
-    if fuel_records:
-        for r in fuel_records:
-            print(f"    {r.get('price_type', 'fuel')}: R{r.get('price_rands', 0):.2f}")
+    print("\n  ── SA Fuel Prices ─────────────────────")
+    fuel_prices = fetch_sa_fuel_prices()
+    if fuel_prices:
+        update_fuel_csv(fuel_prices, zar_rate)
+    elif zar_rate:
+        # At minimum update the exchange rate
+        print("    No new fuel prices — updating ZAR rate only")
+        update_fuel_csv({}, zar_rate)
+    else:
+        print("    No updates available")
 
     print(f"""
   ─────────────────────────────────────
@@ -489,24 +665,39 @@ def update_all():
 
   Data sources:
     Oil:   Alpha Vantage → Yahoo Finance (fallback)
-    Forex: ExchangeRate-API → Alpha Vantage FX (historical)
-    Fuel:  DMRE gazette → SAPIA (fallback)
+    Forex: ExchangeRate-API (free, no key needed)
+    Fuel:  AA.co.za → petrol-price.co.za → DMRE gazette PDF
 """)
+
+
+def update_oil_only():
+    """Update only oil price data."""
+    records = fetch_oil_prices()
+    if records:
+        update_oil_csv(records)
+
+
+def update_forex_only():
+    """Update only exchange rate data."""
+    rate = fetch_current_zar_usd()
+    if rate:
+        print(f"  Current ZAR/USD: R{rate:.2f}")
+
+
+def update_fuel_only():
+    """Update only SA fuel price data."""
+    zar_rate = fetch_current_zar_usd()
+    fuel_prices = fetch_sa_fuel_prices()
+    if fuel_prices:
+        update_fuel_csv(fuel_prices, zar_rate)
 
 
 if __name__ == "__main__":
     if "--oil" in sys.argv:
-        records = fetch_oil_prices()
-        if records:
-            append_to_csv(str(DATA_DIR / "brent_oil_prices.csv"), records)
+        update_oil_only()
     elif "--forex" in sys.argv:
-        records = fetch_zar_usd()
-        if records:
-            print(f"  Latest ZAR/USD: R{records[-1]['zar_usd']:.2f}")
+        update_forex_only()
     elif "--fuel" in sys.argv:
-        records = fetch_sa_fuel_prices()
-        if records:
-            for r in records:
-                print(f"  {r.get('price_type', 'fuel')}: R{r.get('price_rands', 0):.2f}")
+        update_fuel_only()
     else:
         update_all()
