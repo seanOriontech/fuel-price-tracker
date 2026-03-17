@@ -174,10 +174,12 @@ def _style_chart(fig, ax):
     """Apply OrionTech dark styling to matplotlib charts."""
     fig.patch.set_facecolor(CHART_BG)
     ax.set_facecolor(CHART_FACE)
-    ax.tick_params(colors=CHART_TEXT, which="both")
+    ax.tick_params(colors=CHART_TEXT, which="both", labelcolor=CHART_TEXT)
     ax.xaxis.label.set_color(CHART_TEXT)
     ax.yaxis.label.set_color(CHART_TEXT)
     ax.title.set_color(OT_TEXT)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_color(CHART_TEXT)
     for spine in ax.spines.values():
         spine.set_color(CHART_GRID)
     ax.grid(True, alpha=0.2, color=CHART_GRID)
@@ -188,8 +190,12 @@ def _style_dual_axis(fig, ax1, ax2):
     fig.patch.set_facecolor(CHART_BG)
     ax1.set_facecolor(CHART_FACE)
     for a in (ax1, ax2):
-        a.tick_params(which="both")
+        a.tick_params(which="both", colors=CHART_TEXT, labelcolor=CHART_TEXT)
         a.title.set_color(OT_TEXT)
+        a.xaxis.label.set_color(CHART_TEXT)
+        a.yaxis.label.set_color(CHART_TEXT)
+        for label in a.get_xticklabels() + a.get_yticklabels():
+            label.set_color(CHART_TEXT)
         for spine in a.spines.values():
             spine.set_color(CHART_GRID)
     ax1.grid(True, alpha=0.2, color=CHART_GRID)
